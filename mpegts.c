@@ -22,174 +22,259 @@
  */
 int find_packet_start(int fd)
 {
-  uint8_t buffer[BUFSIZE];
-  int ret;
-  off64_t origin, offset;
-  uint8_t* p;
-  off64_t ofs_to_sync = 0, last_ofs_to_sync = -1;
-  int packet_size;
+    uint8_t buffer[BUFSIZE];
+    int ret;
+    off64_t origin, offset;
+    uint8_t* p;
+    off64_t ofs_to_sync = 0, last_ofs_to_sync = -1;
+    int packet_size;
   
-  origin = offset = lseek64(fd, 0, SEEK_CUR);
-  while((ret = read(fd, buffer, sizeof buffer)) > 0) {
-    p = buffer;
-    while((p = memchr(p, SYNC_BYTE, ret)) != NULL)
-    {
-      ofs_to_sync = offset + p - buffer;
-      // printf("Found SYNC_BYTE at %08lx\n", ofs_to_sync);
-      if(last_ofs_to_sync == -1)
-      {
-        last_ofs_to_sync = ofs_to_sync;
-      }
+    origin = offset = lseek64(fd, 0, SEEK_CUR);
+    while((ret = read(fd, buffer, sizeof buffer)) > 0) {
+        p = buffer;
+        while((p = memchr(p, SYNC_BYTE, ret)) != NULL)
+        {
+            ofs_to_sync = offset + p - buffer;
+            // printf("Found SYNC_BYTE at %08lx\n", ofs_to_sync);
+            if(last_ofs_to_sync == -1)
+            {
+                last_ofs_to_sync = ofs_to_sync;
+            }
 
-      packet_size = ofs_to_sync - last_ofs_to_sync;
-      if(packet_size == STANDARD_PACKET_LENGTH
-         || packet_size == TIMESTAMPED_PACKET_LENGTH
-         || packet_size == FEC_PACKET_LENGTH)
-      {
-        printf("SYNC: packet size: %d bytes\n", packet_size);
-        printf("Seek to first sync'ed offset: %08lx\n", last_ofs_to_sync);
-        lseek64(fd, last_ofs_to_sync, SEEK_SET);
-        return packet_size;
-      }
-      p++;
+            packet_size = ofs_to_sync - last_ofs_to_sync;
+            if(packet_size == STANDARD_PACKET_LENGTH
+               || packet_size == TIMESTAMPED_PACKET_LENGTH
+               || packet_size == FEC_PACKET_LENGTH)
+            {
+                int packet_head_offset = packet_size - STANDARD_PACKET_LENGTH;
+
+                printf("SYNC: packet size: %d bytes\n", packet_size);
+                printf("Seek to first sync'ed offset: %08lx\n", last_ofs_to_sync - packet_head_offset);
+                lseek64(fd, last_ofs_to_sync - packet_head_offset, SEEK_SET);
+                return packet_size;
+            }
+            p++;
+        }
+        offset += ret;
     }
-    offset += ret;
-  }
 
-  printf("Cannot find SYNC_BYTE, is this MPEG2-TS?\n");
+    printf("Cannot find SYNC_BYTE, is this MPEG2-TS?\n");
 
-  return 0;
+    return 0;
 }
 
-void print_ts_header(struct mpegts_header* header)
+int read_ts_header(BITS* b, struct mpegts_header* header)
 {
-  printf("H: RAW:[%02x%02x%02x%02x] S:%02x [%c%c%c%c%c%c] PID:%04x, CC:%02d\n",
-         header->sync_byte, header->b2, header->PID_lo, header->b4,
-         header->sync_byte, 
-         header->transport_error_indicator ? 'E' : '_',
-         header->payload_unit_start_indicator ? 'U' : '_',
-         header->transport_priority ? '!' : '_',
-         header->transport_scrambling_control ? 'S' : '_',
-         HAS_AF(*header) ? 'A' : '_',
-         HAS_PAYLOAD(*header) ? 'P' : '_',
-         PID_OF(*header),
-         header->continuity_counter
-    );
+    memset(header, 0, sizeof(struct mpegts_header));
+
+    header->sync_byte = bits_get(b, 8);
+
+    header->transport_error_indicator = bits_getbit(b);
+    header->payload_unit_start_indicator = bits_getbit(b);
+    header->transport_priority = bits_getbit(b);
+    header->pid = bits_get(b, 13);
+
+    header->transport_scrambling_control = bits_get(b, 2);
+    header->adaptation_field_control = bits_get(b, 2);
+    header->continuity_counter = bits_get(b, 4);
+
+    return 0;
 }
 
-int parse_adaptation_field(uint8_t* packet, struct mpegts_adaptation_field* af_p)
+void print_ts_header(uint8_t* buffer, struct mpegts_header* header)
 {
-  struct mpegts_header* header;
-  struct mpegts_adaptation_field af;
-  uint8_t* p;
-
-  memset(&af, 0, sizeof af);
-  header = (struct mpegts_header*)packet;
-  p = packet + sizeof(struct mpegts_header);
-
-  if(header->payload_unit_start_indicator)
-  {
-    p++;
-  }
-
-  if(!HAS_AF(*header))
-  {
-    if(af_p) *af_p = af;
-    return p - packet;
-  }
-  
-  af.adaptation_field_length = *(uint8_t*)p++;
-  if(af.adaptation_field_length == 0)
-  {
-    if(af_p) *af_p = af;
-    return p - packet;
-  }
-  
-  af.adaptation_field_header = *(uint8_t*)p++;
-
-  if(af.PCR_flag)
-  {
-    memcpy(af.pcr_bytes, p, sizeof af.pcr_bytes);
-    p += sizeof af.pcr_bytes;
-  }
-  if(af.OPCR_flag)
-  {
-    memcpy(af.opcr_bytes, p, sizeof af.opcr_bytes);
-    p += sizeof af.opcr_bytes;
-  }
-  if(af.splicing_point_flag)
-  {
-    af.splice_countdown = *p++;
-  }
-  if(af.transport_private_data_flag)
-  {
-    af.transport_private_data_length = *p++;
-    memcpy(af.private_data_byte, p, af.transport_private_data_length);
-    p += af.transport_private_data_length;
-  }
-  if(af.adaptation_field_extension_flag)
-  {
-    af.adaptation_field_extension_length = *p++;
-    af.afe_b1 = *p++;
-    if(af.ltw_flag)
-    {
-      memcpy(&af.ltw, p, sizeof af.ltw);
-      p += sizeof af.ltw;
-    }
-    if(af.piecewise_rate_flag)
-    {
-      memcpy(af.piecewise_bytes, p, sizeof af.piecewise_bytes);
-      p += sizeof af.piecewise_bytes;
-    }
-    if(af.seamless_splice_flag)
-    {
-      memcpy(af.seamless_splice_bytes, p, sizeof af.seamless_splice_bytes);
-      p += sizeof af.seamless_splice_bytes;
-    }
-  }
-
-  if(af_p) *af_p = af;
-  return p - packet;
+    printf("H: RAW:[%02x%02x%02x%02x] S:%02x [%c%c%c%c%c%c] PID:%04x, CC:%02d\n",
+           buffer[0], buffer[1], buffer[2], buffer[3],
+           header->sync_byte, 
+           header->transport_error_indicator ? 'E' : '_',
+           header->payload_unit_start_indicator ? 'U' : '_',
+           header->transport_priority ? '!' : '_',
+           header->transport_scrambling_control ? 'S' : '_',
+           HAS_AF(header) ? 'A' : '_',
+           HAS_PAYLOAD(header) ? 'P' : '_',
+           header->pid,
+           header->continuity_counter
+        );
 }
 
-int read_pat(uint8_t* payload)
+int parse_adaptation_field(BITS* b, struct mpegts_header* header,
+                           struct mpegts_adaptation_field* af)
 {
-  struct mpegts_section_header* header;
-  struct mpegts_program_association_section_entry* p;
-  struct mpegts_program_association_section_entry* pe;
+    memset(af, 0, sizeof af);
 
-  uint32_t size, crc;
+    if(!HAS_AF(header))
+    {
+        return 0;
+    }
+  
+    af->adaptation_field_length = bits_get(b, 8);
+    if(af->adaptation_field_length == 0)
+    {
+        return 0;
+    }
+  
+    af->discontinuity_indicator = bits_getbit(b);
+    af->random_access_indicator = bits_getbit(b);
+    af->elementary_stream_priority_indicator = bits_getbit(b);
+    af->PCR_flag = bits_getbit(b);
+    af->OPCR_flag = bits_getbit(b);
+    af->splicing_point_flag = bits_getbit(b);
+    af->transport_private_data_flag = bits_getbit(b);
+    af->adaptation_field_extension_flag = bits_getbit(b);
 
-  header = (struct mpegts_section_header*)payload;
+    if(af->PCR_flag)
+    {
+        af->program_clock_reference_extension = bits_get(b, 9);
+        af->pcr_reserved = bits_get(b, 6);
+        af->program_clock_reference_base = bits_get(b, 33);
+    }
+    if(af->OPCR_flag)
+    {
+        af->original_program_clock_reference_extension = bits_get(b, 9);
+        af->opcr_reserved = bits_get(b, 6);
+        // bits を 64bit 化しないとだめ
+        af->original_program_clock_reference_base = bits_get(b, 33);
+    }
+    if(af->splicing_point_flag)
+    {
+        af->splice_countdown = bits_get(b, 8);
+    }
+    if(af->transport_private_data_flag)
+    {
+        int i;
 
-  size = SECTION_LENGTH_OF(*header) + 3 - 4;
-  crc = crc32(payload, size);
-  printf("CRC: %08x\n", crc);
+        af->transport_private_data_length = bits_get(b, 8);
+        // ダサいが仕方ない…
+        for(i = 0; i < af->transport_private_data_length; i++) {
+            af->private_data_byte[i] = bits_get(b, 8);
+        }
+    }
+    if(af->adaptation_field_extension_flag)
+    {
+        af->adaptation_field_extension_length = bits_get(b, 8);
 
-  FIX_ORDER_S(header->transport_stream_id);
-  print_section_header(header);
+        af->ltw_flag = bits_getbit(b);
+        af->piecewise_rate_flag = bits_getbit(b);
+        af->seamless_splice_flag = bits_getbit(b);
+        af->afe_reserved = bits_get(b, 5);
 
-  p = payload + sizeof(struct mpegts_section_header);
-  pe = payload + SECTION_LENGTH_OF(*header) + 3 - 4;
-  while(p != pe)
-  {
-    FIX_ORDER_S(p->program_number);
-    FIX_ORDER_S(p->program_map_PID);
-    p->network_PID &= 0x1fff;
+        if(af->ltw_flag)
+        {
+            af->ltw_valid_flag = bits_getbit(b);
+            af->ltw_offset = bits_get(b, 15);
+        }
+        if(af->piecewise_rate_flag)
+        {
+            af->pr_reserved = bits_get(b, 2);
+            af->piecewise_rate = bits_get(b, 22);
+        }
+        if(af->seamless_splice_flag)
+        {
+            af->splice_type = bits_get(b, 4);
+            af->DTS_next_AU_h = bits_get(b, 3);
+            af->marker_bit_h = bits_getbit(b);
+            af->DTS_next_AU_m = bits_get(b, 15);
+            af->marker_bit_m = bits_getbit(b);
+            af->DTS_next_AU_l = bits_get(b, 15);
+            af->marker_bit_l = bits_getbit(b);
+        }
+    }
 
-    printf("PAT: PROG:%04x => PID:%04x\n",
-           p->program_number, p->program_map_PID);
-    p++;
-  }
+    return 0;
+}
 
-  return 0;
+int read_pat(BITS* b)
+{
+    struct mpegts_section_header header;
+    uint32_t crc;
+
+    header.table_id = bits_get(b, 8);
+    header.section_syntax_indicator = bits_getbit(b);
+    header.zero = bits_getbit(b);
+    header.b2_reserved = bits_get(b, 2);
+    header.section_length = bits_get(b, 12);
+
+    print_section_header(&header);
+
+    switch(header.table_id) {
+    case 0x00: {
+        // PAT
+        struct mpegts_program_association_section_header pat_header;
+        struct mpegts_program_association_section_entry e;
+
+        pat_header.transport_stream_id = bits_get(b, 16);
+        
+        pat_header.reserved = bits_get(b, 2);
+        pat_header.version_number = bits_get(b, 5);
+        pat_header.current_next_indicator = bits_getbit(b);
+        
+        pat_header.section_number = bits_get(b, 8);
+        pat_header.last_section_number = bits_get(b, 8);
+        
+        int i, table_size = header.section_length - 5 - 4;
+        pat_header.count = table_size / 4;
+        for(i = 0; i < pat_header.count; i++) {
+            e.program_number = bits_get(b, 16);
+            e.reserved = bits_get(b, 3);
+            e.program_map_PID = bits_get(b, 13);
+            
+            printf("PAT: PROG:%04x => PID:%04x\n",
+                   e.program_number, e.program_map_PID);
+        }
+        break;
+    }
+    case 0x02: {
+        // PMT
+        struct mpegts_program_map_section_header pmt_header;
+        struct mpegts_program_map_section_entry e;
+        int i, j;
+
+        pmt_header.program_number = bits_get(b, 16);
+        pmt_header.reserved1 = bits_get(b, 2);
+        pmt_header.version_number = bits_get(b, 5);
+        pmt_header.current_next_indicator = bits_getbit(b);
+        pmt_header.section_number = bits_get(b, 8);
+        pmt_header.last_section_number = bits_get(b, 8);
+        pmt_header.reserved2 = bits_get(b, 3);
+        pmt_header.PCR_PID = bits_get(b, 13);
+        pmt_header.reserved3 = bits_get(b, 4);
+        pmt_header.program_info_length = bits_get(b, 12);
+        for(i = 0; i < pmt_header.program_info_length; i++) {
+            // 捨てる
+            bits_get(b, 8);
+        }
+        int table_size = header.section_length - 9 - pmt_header.program_info_length - 4;
+        for(i = 0; i < table_size; ) {
+            e.stream_type = bits_get(b, 8);
+            e.reserved1 = bits_get(b, 3);
+            e.elementary_PID = bits_get(b, 13);
+            e.reserved2 = bits_get(b, 4);
+            e.ES_info_length = bits_get(b, 12);
+            for(j = 0; j < e.ES_info_length; j++) {
+                bits_get(b, 8);
+            }
+
+            printf("PMT: STR:%02x => PID:%04x\n", e.stream_type, e.elementary_PID);
+
+            i += 5 + e.ES_info_length;
+        }
+
+        break;
+    }
+    }
+
+    crc = bits_get(b, 32);
+    printf("CRC: %08x\n", crc);
+
+    return 0;
 }
 
 void print_section_header(struct mpegts_section_header* header)
 {
-  printf("SH: ID:%02x SSI:%d, Z:%d, size:%d\n",
-         header->table_id,
-         header->section_syntax_indicator,
-         header->zero,
-         SECTION_LENGTH_OF(*header));
+    printf("SH: ID:%02x SSI:%d, Z:%d, size:%d\n",
+           header->table_id,
+           header->section_syntax_indicator,
+           header->zero,
+           header->section_length);
 }
+
