@@ -19,7 +19,10 @@ int read_section(TSTEST* ctx, PACKET* pctx)
 {
     struct mpegts_section_header sec_header;
     BITS* b = pctx->b;
-    uint32_t crc;
+    uint8_t* body;
+    uint8_t* body_end;
+
+    body = bits_getptr(b);
 
     sec_header.table_id = bits_get(b, 8);
     sec_header.section_syntax_indicator = bits_getbit(b);
@@ -41,8 +44,14 @@ int read_section(TSTEST* ctx, PACKET* pctx)
         break;
     }
 
-    crc = bits_get(b, 32);
-    printf("CRC: %08x\n", crc);
+    body_end = bits_getptr(b);
+
+    uint32_t crc_read, crc;
+    crc = crc32(body, body_end - body);
+
+    crc_read = bits_get(b, 32);
+    printf("CRC: %s (%08x/%08x)\n",
+           (crc == crc_read) ? "[OK]" : "[NG]", crc_read, crc);
 
     return 0;
 }

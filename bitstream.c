@@ -102,3 +102,8 @@ int64_t bits_get(BITS* b, int bits)
     }
     return ret;
 }
+
+uint8_t* bits_getptr(BITS* b)
+{
+    return b->p;
+}
