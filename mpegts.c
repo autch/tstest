@@ -1,10 +1,11 @@
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 
-#define _LARGEFILE64_SOURCE
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <memory.h>
 
 #include "mpegts.h"
@@ -24,12 +25,12 @@ int find_packet_start(int fd)
 {
     uint8_t buffer[BUFSIZE];
     int ret;
-    off64_t origin, offset;
+    off_t origin, offset;
     uint8_t* p;
-    off64_t ofs_to_sync = 0, last_ofs_to_sync = -1;
+    off_t ofs_to_sync = 0, last_ofs_to_sync = -1;
     int packet_size;
   
-    origin = offset = lseek64(fd, 0, SEEK_CUR);
+    origin = offset = lseek(fd, 0, SEEK_CUR);
     while((ret = read(fd, buffer, sizeof buffer)) > 0) {
         p = buffer;
         while((p = memchr(p, SYNC_BYTE, ret)) != NULL)
@@ -50,7 +51,7 @@ int find_packet_start(int fd)
 
                 printf("SYNC: packet size: %d bytes\n", packet_size);
                 printf("Seek to first sync'ed offset: %08lx\n", last_ofs_to_sync - packet_head_offset);
-                lseek64(fd, last_ofs_to_sync - packet_head_offset, SEEK_SET);
+                lseek(fd, last_ofs_to_sync - packet_head_offset, SEEK_SET);
                 return packet_size;
             }
             p++;
@@ -132,7 +133,6 @@ int parse_adaptation_field(BITS* b, struct mpegts_header* header,
     {
         af->original_program_clock_reference_extension = bits_get(b, 9);
         af->opcr_reserved = bits_get(b, 6);
-        // bits を 64bit 化しないとだめ
         af->original_program_clock_reference_base = bits_get(b, 33);
     }
     if(af->splicing_point_flag)

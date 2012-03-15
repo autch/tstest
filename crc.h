@@ -3,7 +3,6 @@
 #define crc_h
 
 #include <stdint.h>
-#include <limits.h>
 
 #define CRCPOLY1 0x04C11DB7
 /* x^{32}+x^{26}+x^{23}+x^{22}+x^{16}+x^{12}+x^{11]+

@@ -1,5 +1,7 @@
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 
-#define _LARGEFILE64_SOURCE
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -17,7 +19,7 @@ int main(int ac, char** av)
 {
     int fd;
     int ret;
-    int packet_size, ofs_to_payload;
+    int packet_size;
     uint8_t* buffer;
 
     if(ac != 2)

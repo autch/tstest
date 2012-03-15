@@ -3,7 +3,6 @@
 #define mpegts_types_h
 
 #include <stdint.h>
-#include <arpa/inet.h>
 
 #define STANDARD_PACKET_LENGTH 188
 #define TIMESTAMPED_PACKET_LENGTH 192

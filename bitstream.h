@@ -1,7 +1,7 @@
 #ifndef BITSTREAM_H
 #define BITSTREAM_H
 
-#include <inttypes.h>
+#include <stdint.h>
 
 struct bitstream
 {
