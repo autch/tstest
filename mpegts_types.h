@@ -84,6 +84,9 @@ struct mpegts_adaptation_field
     int marker_bit_l;
 };
 
+#define TABLE_ID_PAT 0x00
+#define TABLE_ID_PMT 0x02
+
 struct mpegts_section_header
 {
     uint8_t table_id;
