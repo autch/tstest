@@ -14,7 +14,7 @@
 int parse_adaptation_field(BITS* b, struct mpegts_header* header,
                            struct mpegts_adaptation_field* af)
 {
-    memset(af, 0, sizeof af);
+    memset(af, 0, sizeof *af);
 
     if(!HAS_AF(header))
     {
